@@ -1,41 +1,79 @@
+import express, { Request, Response } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { albumTools } from './albums.js';
 import { playTools } from './play.js';
 import { playlistTools } from './playlist.js';
 import { readTools } from './read.js';
 import { createSpotifyApi } from './utils.js';
 
+const app = express();
+
 const server = new McpServer({
   name: 'spotify-controller',
   version: '1.0.0',
 });
 
-[...readTools, ...playTools, ...albumTools, ...playlistTools].forEach(
-  (tool) => {
-    server.tool(tool.name, tool.description, tool.schema, tool.handler);
-  },
-);
+// Регистрируем тулы
+[...readTools, ...playTools, ...albumTools, ...playlistTools].forEach((tool) => {
+  server.tool(
+    tool.name,
+    tool.description,
+    tool.schema,
+    tool.handler as Parameters<typeof server.tool>[3]
+  );
+});
 
-// Proactively refresh the Spotify token every 45 minutes so it never
-// expires mid-session (tokens last 60 minutes; this keeps a safe buffer).
-setInterval(
-  async () => {
-    try {
-      await createSpotifyApi();
-    } catch {
-      // Errors will surface on the next tool call; nothing actionable here.
-    }
-  },
-  45 * 60 * 1000,
-);
+// Хранилище сессий SSE
+const transports = new Map<string, SSEServerTransport>();
 
-async function main() {
-  const transport = new StdioServerTransport();
+// 1. Health check для Render (чтобы деплой завершался успешно)
+app.get('/', (_req: Request, res: Response) => {
+  res.status(200).send('Spotify MCP Server is running!');
+});
+
+// 2. Эндпоинт для открытия SSE соединения
+app.get('/sse', async (req: Request, res: Response) => {
+  console.log('New SSE connection requested');
+  const transport = new SSEServerTransport('/messages', res);
+  transports.set(transport.sessionId, transport);
+
+  req.on('close', () => {
+    console.log(`Session closed: ${transport.sessionId}`);
+    transports.delete(transport.sessionId);
+  });
+
   await server.connect(transport);
-}
+});
 
-main().catch((error) => {
-  console.error('Fatal error in main():', error);
-  process.exit(1);
+// 3. Эндпоинт для отправки сообщений от клиента
+app.post('/messages', async (req: Request, res: Response) => {
+  const sessionId = req.query.sessionId as string;
+  if (!sessionId) {
+    res.status(400).send('Missing sessionId query parameter');
+    return;
+  }
+
+  const transport = transports.get(sessionId);
+  if (transport) {
+    await transport.handlePostMessage(req, res);
+  } else {
+    res.status(400).send('Session not found');
+  }
+});
+
+// Автоматическое обновление токена каждые 45 минут
+setInterval(async () => {
+  try {
+    await createSpotifyApi();
+  } catch {
+    // Игнорируем ошибки при фоновом обновлении
+  }
+}, 45 * 60 * 1000);
+
+// Запуск сервера на порту от Render
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`MCP Spotify Server successfully running on port ${PORT}`);
 });
