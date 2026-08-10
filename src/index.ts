@@ -14,11 +14,18 @@ const server = new McpServer({
   version: '1.0.0',
 });
 
-// Регистрируем тулы через registerTool, чтобы избежать конфликта сигнатур TypeScript
+// Регистрируем тулы в правильном формате для SDK
 const allTools = [...readTools, ...playTools, ...albumTools, ...playlistTools];
 
 allTools.forEach((tool: any) => {
-  (server as any).registerTool(tool);
+  server.tool(
+    tool.name,
+    {
+      description: tool.description,
+      parameters: tool.schema,
+    },
+    tool.handler
+  );
 });
 
 // Хранилище сессий SSE
