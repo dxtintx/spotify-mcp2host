@@ -1,0 +1,1 @@
+# spotify-mcp2host
