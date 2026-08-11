@@ -12,14 +12,20 @@ import { createSpotifyApi } from './utils.js';
 const app = express();
 
 // 1. Обязательный CORS для Google Spark, без жестких ограничений
+app.use((req, res, next) => {
+  console.log(`[RADAR] Запрос от клиента: ${req.method} ${req.originalUrl}`);
+  console.log(`[RADAR] Заголовки:`, req.headers);
+  next();
+});
+
+// Настраиваем CORS и принудительно отвечаем на OPTIONS
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['*']
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
+  allowedHeaders: ['*'],
+  credentials: true
 }));
-
-// ВАЖНО: Мы убрали express.json()!
-// SDK MCP должен сам прочитать сырой поток данных.
+app.options('*', cors()); // Явная обработка preflight запросов
 
 const server = new McpServer({
   name: 'spotify-controller',
