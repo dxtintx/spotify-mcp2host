@@ -1,0 +1,8 @@
+{
+  "clientId": "9711f735370c4751a2dad79751d1c6ca",
+  "clientSecret": "100580f9207b45d4bdc72826d87b1f75",
+  "redirectUri": "http://127.0.0.1:8888/callback",
+  "accessToken": "BQA8Y5jIdgjYSlnujLZKbyJS-hIkH4_hf-8-qclzJhr7R00sKYXn5_Ab41l-3xfvfu8Cx_g-9mvKGSWJBOiRqXW8i9dzu6TFVLdleTvFerYYgQmhXq_m-z7B-rkeqgVPi7Ef4qP0sA54sQOHzvaNVRWDuyAaIoNmTkFvbWy40MARVc2m7dgJaDnbiofbX4KQ_7U8FNZlruDRzFTer7rBuwMSpTKZJ03T32UZOWbuGXODimPBxbxEM90nR38rcjHYGYNB1nodwE6_XPOrQlWMfietO_8bOA_3E_asTkN0e2C_xEdYp32T4k_ZE8kyvGc0atKIVa_DFfAQ5Cyz0beulAjc3UPBgkL7KjXsaxUj1bsEBEC9Bf2HbDxbMi07Aol4rQ",
+  "refreshToken": "AQBWydOgCYuTBL3q6tq2L02xm_XP4i_qjRR2jTBeoOR6dOdTiBrQX2qJJgVk1DYDne3UiLrPqn2PLaufx1ACb5OXu90CJV743QJFH_HS5h-S05oeeuzp93M6vUK3wPCkfos",
+  "expiresAt": 1786405985463
+}
