@@ -1,8 +1,10 @@
 // @ts-nocheck
 import express from 'express';
 import cors from 'cors';
+import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { albumTools } from './albums.js';
 import { playTools } from './play.js';
 import { playlistTools } from './playlist.js';
@@ -11,7 +13,9 @@ import { createSpotifyApi } from './utils.js';
 
 const app = express();
 
-// 1. Обязательный CORS для Google Spark, без жестких ограничений
+// Нужно для чтения JSON-RPC тела в POST-запросах Streamable HTTP transport
+app.use(express.json());
+
 // --- РАДАР: Логируем абсолютно все входящие запросы ---
 app.use((req, res, next) => {
   console.log(`[RADAR] Запрос от клиента: ${req.method} ${req.originalUrl}`);
@@ -19,17 +23,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Настраиваем CORS
+// Настраиваем CORS. mcp-session-id обязателен и в allowedHeaders, и в exposedHeaders,
+// иначе клиент не сможет ни отправить, ни прочитать заголовок сессии.
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
-  allowedHeaders: ['*'],
+  allowedHeaders: ['*', 'mcp-session-id', 'Content-Type'],
+  exposedHeaders: ['mcp-session-id'],
   credentials: true
 }));
 
-// Явная обработка OPTIONS только для нужных путей (без звездочек!)
 app.options('/sse', cors());
-app.options('/messages', cors());
 
 const server = new McpServer({
   name: 'spotify-controller',
@@ -38,59 +42,71 @@ const server = new McpServer({
 
 const allTools = [...readTools, ...playTools, ...albumTools, ...playlistTools];
 
-// 2. Возвращаем вашу ОРИГИНАЛЬНУЮ регистрацию.
-// @ts-nocheck позволяет сохранить целыми Zod-схемы, которые нужны Google Spark.
 allTools.forEach((tool) => {
   server.tool(tool.name, tool.description, tool.schema, tool.handler);
 });
 
+// Транспорты по sessionId (Streamable HTTP transport, актуальная версия MCP-спеки)
 const transports = new Map();
 
 app.get('/', (req, res) => {
   res.status(200).send('Spotify MCP Server is perfectly running!');
 });
 
-// Google Spark (и другие клиенты) перед реальным подключением делают
-// HEAD-запрос на /sse, чтобы проверить доступность эндпоинта.
-// Express по умолчанию направляет HEAD в тот же обработчик, что и GET,
-// а наш GET-обработчик открывает бесконечный SSE-поток и никогда не
-// завершает ответ — из-за этого HEAD-запрос зависает до таймаута,
-// и Spark считает URL недоступным. Отвечаем на HEAD сразу и без
-// открытия SSE-транспорта.
-app.head('/sse', (req, res) => {
-  console.log('--- HEAD /sse (reachability check) ---');
-  res.status(200).end();
-});
+// Единая точка входа для Streamable HTTP transport.
+// GET  — открытие SSE-потока для существующей сессии (server -> client push)
+// POST — JSON-RPC сообщения от клиента, включая initialize
+// DELETE — закрытие сессии
+// Именно так подключается Google Spark/Gemini — он шлёт HEAD, затем POST
+// с initialize-запросом прямо на этот URL, а не на отдельный /messages.
+app.all('/sse', async (req, res) => {
+  try {
+    const sessionId = req.headers['mcp-session-id'];
+    let transport;
 
-app.get('/sse', async (req, res) => {
-  console.log('--- SSE Connection Started by Client ---');
+    if (sessionId && transports.has(sessionId)) {
+      transport = transports.get(sessionId);
+    } else if (req.method === 'POST' && !sessionId && isInitializeRequest(req.body)) {
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid) => {
+          console.log(`--- MCP session initialized: ${sid} ---`);
+          transports.set(sid, transport);
+        },
+      });
 
-  // Возвращаем стандартный относительный путь, Google Spark умеет его склеивать
-  const transport = new SSEServerTransport('/messages', res);
-  transports.set(transport.sessionId, transport);
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          console.log(`--- MCP session closed: ${transport.sessionId} ---`);
+          transports.delete(transport.sessionId);
+        }
+      };
 
-  req.on('close', () => {
-    console.log(`--- SSE Connection Closed: ${transport.sessionId} ---`);
-    transports.delete(transport.sessionId);
-  });
+      await server.connect(transport);
+    } else if (req.method === 'HEAD') {
+      // Google Spark проверяет доступность URL перед подключением
+      res.status(200).end();
+      return;
+    } else {
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+        id: null,
+      });
+      return;
+    }
 
-  await server.connect(transport);
-});
-
-app.post('/messages', async (req, res) => {
-  const sessionId = req.query.sessionId as string;
-
-  if (!sessionId) {
-    return res.status(400).send('Missing sessionId');
+    await transport.handleRequest(req, res, req.body);
+  } catch (error) {
+    console.error('MCP request error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: '2.0',
+        error: { code: -32603, message: 'Internal server error' },
+        id: null,
+      });
+    }
   }
-
-  const transport = transports.get(sessionId);
-  if (!transport) {
-    return res.status(404).send('Session not found');
-  }
-
-  // Передаем запрос напрямую в SDK
-  await transport.handlePostMessage(req, res);
 });
 
 setInterval(async () => {

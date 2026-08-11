@@ -21,7 +21,7 @@
   "author": "Marcel Marais",
   "description": "A Model Context Protocol server for Spotify integration",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@spotify/web-api-ts-sdk": "^1.2.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
