@@ -35,16 +35,25 @@ app.use(cors({
 
 app.options('/sse', cors());
 
-const server = new McpServer({
-  name: 'spotify-controller',
-  version: '1.0.0',
-});
-
 const allTools = [...readTools, ...playTools, ...albumTools, ...playlistTools];
 
-allTools.forEach((tool) => {
-  server.tool(tool.name, tool.description, tool.schema, tool.handler);
-});
+// ВАЖНО: McpServer можно подключить только к ОДНОМУ транспорту одновременно.
+// Если использовать общий на весь процесс инстанс, вторая параллельная
+// сессия (второй initialize, что Google Spark иногда делает) сломает
+// первую с ошибкой "Already connected to a transport". Поэтому создаём
+// новый McpServer под каждую новую сессию.
+function createMcpServer() {
+  const server = new McpServer({
+    name: 'spotify-controller',
+    version: '1.0.0',
+  });
+
+  allTools.forEach((tool) => {
+    server.tool(tool.name, tool.description, tool.schema, tool.handler);
+  });
+
+  return server;
+}
 
 // Транспорты по sessionId (Streamable HTTP transport, актуальная версия MCP-спеки)
 const transports = new Map();
@@ -75,11 +84,14 @@ app.all('/sse', async (req, res) => {
         },
       });
 
+      const server = createMcpServer();
+
       transport.onclose = () => {
         if (transport.sessionId) {
           console.log(`--- MCP session closed: ${transport.sessionId} ---`);
           transports.delete(transport.sessionId);
         }
+        server.close();
       };
 
       await server.connect(transport);
