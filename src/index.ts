@@ -11,12 +11,13 @@ import { createSpotifyApi } from './utils.js';
 
 const app = express();
 
-// Включаем CORS для любых источников
+// 1. Обязательные middleware для CORS и парсинга JSON
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'mcp-session-id', 'mcp-protocol-version']
 }));
+app.use(express.json());
 
 const server = new McpServer({
   name: 'spotify-controller',
@@ -39,19 +40,26 @@ allTools.forEach((tool) => {
 
 const transports = new Map();
 
+// Главная заглушка
 app.get('/', (req, res) => {
   res.status(200).send('Spotify MCP Server is perfectly running!');
 });
 
-// Эндпоинт SSE с явными заголовками
+// 2. Обработка SSE соединения с АБСОЛЮТНЫМ URL для сообщений
 app.get('/sse', async (req, res) => {
-  console.log('New SSE connection initiated');
+  console.log('New SSE connection initiated by client');
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
 
-  const transport = new SSEServerTransport('/messages', res);
+  // Формируем полный абсолютный URL для эндпоинта отправки сообщений
+  const host = req.get('host');
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const endpointUrl = `${protocol}://${host}/messages`;
+
+  const transport = new SSEServerTransport(endpointUrl, res);
   transports.set(transport.sessionId, transport);
 
   req.on('close', () => {
@@ -61,20 +69,23 @@ app.get('/sse', async (req, res) => {
   await server.connect(transport);
 });
 
+// 3. Эндпоинт отправки сообщений (принимает sessionId и из Query, и из Headers)
 app.post('/messages', async (req, res) => {
-  const sessionId = req.query.sessionId;
+  const sessionId = (req.query.sessionId as string) || (req.headers['mcp-session-id'] as string);
+
   if (!sessionId) {
-    return res.status(400).send('Missing sessionId');
+    return res.status(400).json({ error: 'Missing sessionId' });
   }
 
   const transport = transports.get(sessionId);
   if (transport) {
     await transport.handlePostMessage(req, res);
   } else {
-    res.status(400).send('Session not found');
+    res.status(404).json({ error: 'Session not found or expired' });
   }
 });
 
+// Обновление токена Spotify
 setInterval(async () => {
   try {
     await createSpotifyApi();
@@ -85,5 +96,5 @@ setInterval(async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server successfully started on port ${PORT}`);
+  console.log(`Server successfully running on port ${PORT}`);
 });
