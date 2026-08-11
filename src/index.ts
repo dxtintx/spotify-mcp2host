@@ -18,14 +18,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// Настраиваем CORS и принудительно отвечаем на OPTIONS
+// Настраиваем CORS
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
   allowedHeaders: ['*'],
   credentials: true
 }));
-app.options('*', cors()); // Явная обработка preflight запросов
+
+// ИСПРАВЛЕНА ОШИБКА EXPRESS 5: используем '/*' вместо '*'
+app.options('/*', cors());
 
 const server = new McpServer({
   name: 'spotify-controller',
