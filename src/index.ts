@@ -11,13 +11,15 @@ import { createSpotifyApi } from './utils.js';
 
 const app = express();
 
-// 1. Обязательные middleware для CORS и парсинга JSON
+// 1. Обязательный CORS для Google Spark, без жестких ограничений
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'mcp-session-id', 'mcp-protocol-version']
+  allowedHeaders: ['*']
 }));
-app.use(express.json());
+
+// ВАЖНО: Мы убрали express.json()!
+// SDK MCP должен сам прочитать сырой поток данных.
 
 const server = new McpServer({
   name: 'spotify-controller',
@@ -26,66 +28,49 @@ const server = new McpServer({
 
 const allTools = [...readTools, ...playTools, ...albumTools, ...playlistTools];
 
+// 2. Возвращаем вашу ОРИГИНАЛЬНУЮ регистрацию.
+// @ts-nocheck позволяет сохранить целыми Zod-схемы, которые нужны Google Spark.
 allTools.forEach((tool) => {
-  let shape = tool.schema || {};
-  if (shape && shape.shape) {
-    shape = shape.shape;
-  }
-  if (tool.description) {
-    server.tool(tool.name, tool.description, shape, tool.handler);
-  } else {
-    server.tool(tool.name, shape, tool.handler);
-  }
+  server.tool(tool.name, tool.description, tool.schema, tool.handler);
 });
 
 const transports = new Map();
 
-// Главная заглушка
 app.get('/', (req, res) => {
   res.status(200).send('Spotify MCP Server is perfectly running!');
 });
 
-// 2. Обработка SSE соединения с АБСОЛЮТНЫМ URL для сообщений
 app.get('/sse', async (req, res) => {
-  console.log('New SSE connection initiated by client');
+  console.log('--- SSE Connection Started by Client ---');
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-
-  // Формируем полный абсолютный URL для эндпоинта отправки сообщений
-  const host = req.get('host');
-  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-  const endpointUrl = `${protocol}://${host}/messages`;
-
-  const transport = new SSEServerTransport(endpointUrl, res);
+  // Возвращаем стандартный относительный путь, Google Spark умеет его склеивать
+  const transport = new SSEServerTransport('/messages', res);
   transports.set(transport.sessionId, transport);
 
   req.on('close', () => {
+    console.log(`--- SSE Connection Closed: ${transport.sessionId} ---`);
     transports.delete(transport.sessionId);
   });
 
   await server.connect(transport);
 });
 
-// 3. Эндпоинт отправки сообщений (принимает sessionId и из Query, и из Headers)
 app.post('/messages', async (req, res) => {
-  const sessionId = (req.query.sessionId as string) || (req.headers['mcp-session-id'] as string);
+  const sessionId = req.query.sessionId as string;
 
   if (!sessionId) {
-    return res.status(400).json({ error: 'Missing sessionId' });
+    return res.status(400).send('Missing sessionId');
   }
 
   const transport = transports.get(sessionId);
-  if (transport) {
-    await transport.handlePostMessage(req, res);
-  } else {
-    res.status(404).json({ error: 'Session not found or expired' });
+  if (!transport) {
+    return res.status(404).send('Session not found');
   }
+
+  // Передаем запрос напрямую в SDK
+  await transport.handlePostMessage(req, res);
 });
 
-// Обновление токена Spotify
 setInterval(async () => {
   try {
     await createSpotifyApi();
@@ -96,5 +81,5 @@ setInterval(async () => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server successfully running on port ${PORT}`);
+  console.log(`Server successfully started on port ${PORT}`);
 });
