@@ -50,6 +50,18 @@ app.get('/', (req, res) => {
   res.status(200).send('Spotify MCP Server is perfectly running!');
 });
 
+// Google Spark (и другие клиенты) перед реальным подключением делают
+// HEAD-запрос на /sse, чтобы проверить доступность эндпоинта.
+// Express по умолчанию направляет HEAD в тот же обработчик, что и GET,
+// а наш GET-обработчик открывает бесконечный SSE-поток и никогда не
+// завершает ответ — из-за этого HEAD-запрос зависает до таймаута,
+// и Spark считает URL недоступным. Отвечаем на HEAD сразу и без
+// открытия SSE-транспорта.
+app.head('/sse', (req, res) => {
+  console.log('--- HEAD /sse (reachability check) ---');
+  res.status(200).end();
+});
+
 app.get('/sse', async (req, res) => {
   console.log('--- SSE Connection Started by Client ---');
 
