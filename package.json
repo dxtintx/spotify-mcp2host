@@ -23,12 +23,14 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.10.1",
     "@spotify/web-api-ts-sdk": "^1.2.0",
+    "cors": "^2.8.6",
     "express": "^5.2.1",
     "open": "^10.1.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^22.13.8",
     "typescript": "^5.8.2"

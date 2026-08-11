@@ -1,5 +1,6 @@
 // @ts-nocheck
 import express from 'express';
+import cors from 'cors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { albumTools } from './albums.js';
@@ -10,6 +11,13 @@ import { createSpotifyApi } from './utils.js';
 
 const app = express();
 
+// Включаем CORS для любых источников
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 const server = new McpServer({
   name: 'spotify-controller',
   version: '1.0.0',
@@ -17,17 +25,11 @@ const server = new McpServer({
 
 const allTools = [...readTools, ...playTools, ...albumTools, ...playlistTools];
 
-// Умная регистрация тулов, которая обходит баги SDK
 allTools.forEach((tool) => {
-  // 1. Если схемы нет (тул без параметров), передаем пустой объект {}
   let shape = tool.schema || {};
-
-  // 2. Если схема уже обернута в ZodObject, достаем из нее сырую форму (shape)
   if (shape && shape.shape) {
     shape = shape.shape;
   }
-
-  // 3. Вызываем метод SDK с правильным количеством аргументов
   if (tool.description) {
     server.tool(tool.name, tool.description, shape, tool.handler);
   } else {
@@ -35,29 +37,30 @@ allTools.forEach((tool) => {
   }
 });
 
-// Хранилище сессий SSE
 const transports = new Map();
 
-// Эндпоинт для проверки здоровья сервера (чтобы Render понимал, что сервер жив)
 app.get('/', (req, res) => {
   res.status(200).send('Spotify MCP Server is perfectly running!');
 });
 
-// Эндпоинт для старта SSE соединения
+// Эндпоинт SSE с явными заголовками
 app.get('/sse', async (req, res) => {
   console.log('New SSE connection initiated');
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
   const transport = new SSEServerTransport('/messages', res);
   transports.set(transport.sessionId, transport);
 
   req.on('close', () => {
-    console.log(`Connection closed for session: ${transport.sessionId}`);
     transports.delete(transport.sessionId);
   });
 
   await server.connect(transport);
 });
 
-// Эндпоинт для приема сообщений
 app.post('/messages', async (req, res) => {
   const sessionId = req.query.sessionId;
   if (!sessionId) {
@@ -72,7 +75,6 @@ app.post('/messages', async (req, res) => {
   }
 });
 
-// Поддержание токена Spotify живым
 setInterval(async () => {
   try {
     await createSpotifyApi();
@@ -81,7 +83,6 @@ setInterval(async () => {
   }
 }, 45 * 60 * 1000);
 
-// Запуск сервера с привязкой к порту Render
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server successfully started on port ${PORT}`);
